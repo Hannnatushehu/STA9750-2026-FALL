@@ -1,0 +1,18 @@
+---
+title: "Hannatu Shehu"
+---
+
+# Welcome!
+
+Hello! My name is Hannatu Shehu. I am a Master's student in Business Analytics at Baruch College.
+
+I am interested in using data and analytics to solve business problems and support better decision-making. Through my graduate studies, I am developing my skills in data analysis, programming, database management, and business intelligence.
+
+This website will serve as a portfolio for my STA 9750 coursework and data analytics projects.
+```{r}
+graduation_date <- as.Date("2027-12-31")
+today <- Sys.Date()
+days_to_graduation <- graduation_date - today
+```
+
+I expect to graduate in approximately `r days_to_graduation` days.
