@@ -686,9 +686,10 @@ greenest_mode |>
 
  Carbon estimates lean on regional power grid averages and reported fuel use, meaning local differences in power generation change the figures. Also, our award ranking used a 78,750 UPT eligibility cutoff to focus on active systems, and we specifically left out agency mode records involving biodiesel use so that direct emissions accounting quirks wouldn't distort the real world comparison.
  
- <details>
-<summary><strong>AI Usage Statement</strong></summary>
+
+::: {.callout-note}
+## AI Usage Statement
 
 I used generative AI while working on this project to help me understand some R code and correct errors in my analysis. I also used it to better understand the assignment instructions and how to format parts of my report in Quarto. I ran the code myself, reviewed the results, and made my own decisions about the analysis. I wrote the GTA press release myself based on my analysis and results.
 
-</details>
+:::
