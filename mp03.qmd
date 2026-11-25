@@ -1,5 +1,1432 @@
 ---
-title: "Mini-Project Placeholder"
+title: "Where My People At? Exploring American Communities"
+format: html
+execute:
+  echo: false
+  warning: false
+  message: false
 ---
 
-This is a placeholder for STA9750 Mini-Project 3. Check back soon for more!
+### Task 1: CBSA Population Breakdown
+I initially attempted to use the 2024 ACS one-year estimates, but the selected Korean population variable returned missing values. I switched to the 2024 ACS five-year estimates to obtain the required population data.
+
+```{r}
+# Load required packages
+library(tidycensus)
+library(dplyr)
+library(tidyr)
+library(readr)
+
+# Create the folder for cached data
+dir.create("data/mp03", recursive = TRUE, showWarnings = FALSE)
+
+# Define population variables
+population_variables <- c(
+  korean = "B02018_005",
+  total = "B01003_001"
+)
+
+# PART A: Download and cache ACS-1 data
+
+acs1_file <- "data/mp03/cbsa_population_acs1.csv"
+
+if (!file.exists(acs1_file)) {
+  cbsa_acs1 <- get_acs(
+    geography = "cbsa",
+    variables = population_variables,
+    year = 2024,
+    survey = "acs1"
+  )
+
+  write_csv(cbsa_acs1, acs1_file)
+}
+
+cbsa_acs1 <- read_csv(
+  acs1_file,
+  col_types = cols(GEOID = col_character())
+)
+
+# Check availability of ACS-1 population estimates
+acs1_check <- cbsa_acs1 |>
+  group_by(variable) |>
+  summarise(
+    available = sum(!is.na(estimate)),
+    missing = sum(is.na(estimate)),
+    .groups = "drop"
+  )
+
+
+# PART B: Download and cache ACS-5 data
+
+acs5_file <- "data/mp03/cbsa_population_acs5.csv"
+
+if (!file.exists(acs5_file)) {
+  cbsa_acs5 <- get_acs(
+    geography = "cbsa",
+    variables = population_variables,
+    year = 2024,
+    survey = "acs5"
+  )
+
+  write_csv(cbsa_acs5, acs5_file)
+}
+
+cbsa_acs5 <- read_csv(
+  acs5_file,
+  col_types = cols(GEOID = col_character())
+)
+
+
+# PART C: Prepare ACS-5 population data
+
+cbsa_summary <- cbsa_acs5 |>
+  select(GEOID, NAME, variable, estimate) |>
+  pivot_wider(
+    names_from = variable,
+    values_from = estimate
+  ) |>
+  mutate(
+    korean_percentage = 100 * korean / total
+  )
+
+
+# PART D: Explore Korean American populations
+
+# Top 10 areas by Korean American population
+top_korean_cbsa <- cbsa_summary |>
+  filter(!is.na(korean), !is.na(total), total > 0) |>
+  arrange(desc(korean)) |>
+  slice_head(n = 10)
+
+top_korean_cbsa |>
+  knitr::kable(
+    col.names = c(
+      "CBSA Code",
+      "Metropolitan or Micropolitan Area",
+      "Total Population",
+      "Korean Population",
+      "Korean Population (%)"
+    ),
+    digits = 2,
+    format.args = list(big.mark = ","),
+    caption = "Top 10 Areas by Korean American Population"
+  )
+
+# Top 10 areas by Korean American population percentage
+top_korean_percentage <- cbsa_summary |>
+  filter(!is.na(korean_percentage), total > 0) |>
+  arrange(desc(korean_percentage)) |>
+  slice_head(n = 10)
+
+top_korean_percentage |>
+  knitr::kable(
+    col.names = c(
+      "CBSA Code",
+      "Metropolitan or Micropolitan Area",
+      "Total Population",
+      "Korean Population",
+      "Korean Population (%)"
+    ),
+    digits = 2,
+    format.args = list(big.mark = ","),
+    caption = "Top 10 Areas by Korean American Population Percentage"
+  )
+```
+
+
+### Task 2: NYC Tract Population Breakdown
+
+```{r}
+# TASK 2: NYC CENSUS TRACT POPULATION BREAKDOWN
+
+# Load required packages
+library(tidycensus)
+library(dplyr)
+library(sf)
+
+# Create the data folder if it does not exist
+dir.create("data/mp03", recursive = TRUE, showWarnings = FALSE)
+
+# Define the five NYC boroughs using county FIPS codes
+nyc_counties <- c("005", "047", "061", "081", "085")
+
+# Define the Census variables
+tract_variables <- c(
+  korean = "B02018_005",
+  total = "B01003_001"
+)
+
+# Define the cached geographic data file
+tract_file <- "data/mp03/nyc_tract_population.gpkg"
+
+# Download only if the file does not already exist
+if (!file.exists(tract_file)) {
+
+  nyc_tracts <- get_acs(
+    geography = "tract",
+    variables = tract_variables,
+    state = "NY",
+    county = nyc_counties,
+    year = 2024,
+    survey = "acs5",
+    geometry = TRUE,
+    output = "wide"
+  )
+
+  # Save the geographic data and population estimates
+  st_write(nyc_tracts, tract_file, quiet = TRUE)
+}
+
+# Read the saved geographic data
+nyc_tracts <- st_read(tract_file, quiet = TRUE)
+
+# Calculate Korean American population percentage
+nyc_tracts <- nyc_tracts |>
+  mutate(
+    korean_percentage = if_else(
+      totalE > 0,
+      100 * koreanE / totalE,
+      NA_real_
+    )
+  )
+
+# Display a summary of the census tract data
+data.frame(
+  Metric = "NYC Census Tracts",
+  Count = nrow(nyc_tracts)
+) |>
+  knitr::kable(
+    caption = "NYC Census Tract Data Summary",
+    format.args = list(big.mark = ",")
+  )
+```
+
+
+### Task 3: NYC Neighborhood Tabulation Areas
+
+```{r}
+# TASK 3: DOWNLOAD AND LOAD NYC NTA SHAPEFILE
+
+library(sf)
+
+# Function to download, extract, and load NYC NTA data
+load_nyc_nta <- function() {
+
+  # Create the data directory
+  data_dir <- "data/mp03"
+
+  dir.create(
+    data_dir,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+
+  # Define file locations
+  zip_file <- file.path(data_dir, "nynta2020_26d.zip")
+  unzip_dir <- file.path(data_dir, "nyc_nta")
+
+  # NYC Department of City Planning download URL
+  nta_url <- paste0(
+    "https://s-media.nyc.gov/agencies/dcp/assets/files/",
+    "zip/data-tools/bytes/nynta2020_26d.zip"
+  )
+
+  # Check whether the ZIP file is already cached
+  if (!file.exists(zip_file)) {
+
+    # Use the file previously downloaded to the computer
+    local_zip <- "C:/Users/hannatu/Downloads/nynta2020_26d.zip"
+
+    if (file.exists(local_zip)) {
+
+      file.copy(
+        from = local_zip,
+        to = zip_file
+      )
+
+    } else {
+
+      # Download from NYC if no local copy exists
+      download.file(
+        url = nta_url,
+        destfile = zip_file,
+        mode = "wb"
+      )
+    }
+  }
+
+  # Find any previously extracted shapefile
+  shp_files <- list.files(
+    path = unzip_dir,
+    pattern = "\\.shp$",
+    recursive = TRUE,
+    full.names = TRUE
+  )
+
+  # Extract the ZIP if the shapefile is not present
+  if (length(shp_files) == 0) {
+
+    dir.create(
+      unzip_dir,
+      recursive = TRUE,
+      showWarnings = FALSE
+    )
+
+    unzip(
+      zipfile = zip_file,
+      exdir = unzip_dir
+    )
+
+    shp_files <- list.files(
+      path = unzip_dir,
+      pattern = "\\.shp$",
+      recursive = TRUE,
+      full.names = TRUE
+    )
+  }
+
+  # Stop if no shapefile is found
+  if (length(shp_files) == 0) {
+    stop("NTA shapefile was not found.")
+  }
+
+  # Read the NTA shapefile as an sf object
+  nta_data <- st_read(
+    shp_files[1],
+    quiet = TRUE
+  )
+
+  # Keep the columns needed for neighborhood analysis
+  nta_data <- nta_data |>
+    select(
+      NTA2020,
+      NTAName,
+      BoroName
+    )
+
+  # Return the geographic data
+  return(nta_data)
+}
+
+
+# LOAD AND CHECK THE NYC NTA DATA
+nyc_nta <- load_nyc_nta()
+# Display a summary of the neighborhood data
+data.frame(
+  Metric = "Neighborhood Tabulation Areas",
+  Count = nrow(nyc_nta)
+) |>
+  knitr::kable(
+    caption = "NYC Neighborhood Data Summary",
+    format.args = list(big.mark = ",")
+  )
+
+
+```
+
+
+### Task 4: Aggregate Census Tract Data to Neighborhoods
+
+```{r}
+# TASK 4: AGGREGATE CENSUS TRACTS TO NTAs
+
+library(sf)
+library(dplyr)
+
+# Check that both datasets are available
+stopifnot(
+  inherits(nyc_tracts, "sf"),
+  inherits(nyc_nta, "sf")
+)
+
+# Make sure both datasets use the same coordinate system
+nyc_tracts <- st_transform(nyc_tracts, st_crs(nyc_nta))
+
+# Assign each census tract to the NTA with the largest overlap
+tract_nta_join <- st_join(
+  nyc_tracts,
+  nyc_nta %>% select(NTA2020),
+  largest = TRUE,
+  left = TRUE
+)
+
+# Check how many tracts were matched
+
+
+# Remove geometry and aggregate population estimates
+nta_population <- tract_nta_join %>%
+  st_drop_geometry() %>%
+  filter(!is.na(NTA2020)) %>%
+  group_by(NTA2020) %>%
+  summarise(
+    korean_population = sum(
+      koreanE,
+      na.rm = TRUE
+    ),
+    total_population = sum(
+      totalE,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    korean_percentage = if_else(
+      total_population > 0,
+      100 * korean_population / total_population,
+      NA_real_
+    )
+  )
+
+# Join population results back to neighborhood boundaries
+nyc_nta_population <- nyc_nta %>%
+  left_join(
+    nta_population,
+    by = "NTA2020"
+  )
+
+
+# Check the number of neighborhoods
+
+
+# Find the 10 neighborhoods with the largest Korean population
+nyc_nta_population %>%
+  st_drop_geometry() %>%
+  arrange(desc(korean_population)) %>%
+  select(
+    NTAName,
+    BoroName,
+    korean_population,
+    korean_percentage
+  ) %>%
+  head(10) %>%
+  knitr::kable(
+    col.names = c(
+      "Neighborhood",
+      "Borough",
+      "Korean Population",
+      "Korean Population (%)"
+    ),
+    digits = 2,
+    format.args = list(big.mark = ","),
+    caption = "Top 10 NYC Neighborhoods by Korean American Population"
+  )
+```
+
+
+### Task 5: Download and Cache NYC PLUTO Data
+
+```{r}
+# TASK 5: DOWNLOAD NYC PLUTO DATA USING PAGINATION
+
+library(readr)
+library(dplyr)
+
+# Function to download and cache the complete NYC PLUTO dataset
+load_nyc_pluto <- function() {
+
+  # STEP 1: Create the folder for PLUTO data
+
+  data_dir <- "data/mp03/pluto"
+
+  dir.create(
+    data_dir,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+
+  # Location of the final cached dataset
+  cache_file <- file.path(data_dir, "nyc_pluto.rds")
+
+  # STEP 2: Check for an existing complete dataset
+
+  if (file.exists(cache_file)) {
+    message("Loading cached NYC PLUTO data...")
+    return(readRDS(cache_file))
+  }
+
+  # STEP 3: Define the NYC Open Data API
+
+  base_url <- paste0(
+    "https://data.cityofnewyork.us/resource/",
+    "64uk-42ks.csv"
+  )
+
+  # Number of records per request
+  batch_size <- 10000
+
+  # Starting record
+  offset <- 0
+
+  # STEP 4: Download the data in batches
+
+  repeat {
+
+    # Prevent scientific notation in the API URL
+    offset_text <- format(
+      offset,
+      scientific = FALSE,
+      trim = TRUE
+    )
+
+    # Create the API request URL
+    request_url <- paste0(
+      base_url,
+      "?$limit=", batch_size,
+      "&$offset=", offset_text,
+      "&$order=bbl"
+    )
+
+    # File for the current batch
+    batch_file <- file.path(
+      data_dir,
+      paste0("pluto_batch_", offset_text, ".csv")
+    )
+
+    # Download only if the batch is not already cached
+    if (!file.exists(batch_file)) {
+
+      message("Downloading records starting at ", offset_text)
+
+      # Download to a temporary file first
+      temp_file <- paste0(batch_file, ".tmp")
+
+      tryCatch({
+
+        download.file(
+          url = request_url,
+          destfile = temp_file,
+          mode = "wb",
+          quiet = TRUE
+        )
+
+        # Check that the download created a file
+        if (!file.exists(temp_file)) {
+          stop("Download did not create a file.")
+        }
+
+        # Move the completed download into the cache
+        if (!file.rename(temp_file, batch_file)) {
+          stop("Could not save the downloaded batch.")
+        }
+
+      }, error = function(e) {
+
+        # Remove an incomplete temporary download
+        if (file.exists(temp_file)) {
+          file.remove(temp_file)
+        }
+
+        stop(
+          "Download failed at offset ",
+          offset_text,
+          ": ",
+          conditionMessage(e)
+        )
+      })
+    }
+
+    # STEP 5: Read the current batch
+
+    batch <- read_csv(
+      batch_file,
+      col_types = cols(.default = col_character()),
+      show_col_types = FALSE,
+      progress = FALSE
+    )
+
+    batch_rows <- nrow(batch)
+
+    message(
+      "Batch at offset ",
+      offset_text,
+      ": ",
+      batch_rows,
+      " records"
+    )
+
+    # An empty batch means there are no more records
+    if (batch_rows == 0) {
+      break
+    }
+
+    # Stop after the final partial batch
+    if (batch_rows < batch_size) {
+      break
+    }
+
+    # Move to the next batch
+    offset <- offset + batch_size
+  }
+
+  # STEP 6: Find all downloaded batch files
+
+  batch_files <- list.files(
+    data_dir,
+    pattern = "^pluto_batch_[0-9]+\\.csv$",
+    full.names = TRUE
+  )
+
+  # Sort batches by their numeric offsets
+  batch_offsets <- as.numeric(
+    sub(
+      "^pluto_batch_([0-9]+)\\.csv$",
+      "\\1",
+      basename(batch_files)
+    )
+  )
+
+  batch_files <- batch_files[order(batch_offsets)]
+
+  # STEP 7: Combine all batches into one dataset
+
+  message("Combining downloaded PLUTO batches...")
+
+  pluto_data <- bind_rows(
+    lapply(batch_files, function(file) {
+
+      read_csv(
+        file,
+        col_types = cols(.default = col_character()),
+        show_col_types = FALSE,
+        progress = FALSE
+      )
+    })
+  )
+
+  # STEP 8: Save the complete dataset locally
+
+  saveRDS(
+    object = pluto_data,
+    file = cache_file
+  )
+
+  message("NYC PLUTO data downloaded and cached successfully!")
+
+  return(pluto_data)
+}
+
+
+# STEP 9: LOAD THE COMPLETE NYC PLUTO DATASET
+
+nyc_pluto <- load_nyc_pluto()
+```
+
+```{r}
+#| results: hide
+
+# STEP 10: VERIFY THE DATA
+
+# Number of property records
+nrow(nyc_pluto)
+
+# Number of columns
+ncol(nyc_pluto)
+
+# Check for duplicate property identifiers
+sum(duplicated(nyc_pluto$bbl))
+
+# Preview selected property information
+nyc_pluto %>%
+  select(
+    borough,
+    address,
+    landuse,
+    unitsres,
+    yearbuilt,
+    latitude,
+    longitude
+  ) %>%   
+  head(10)
+```
+```{r}
+data.frame(
+  Metric = c(
+    "Property Records",
+    "Dataset Columns",
+    "Duplicate Property Identifiers"
+  ),
+  Count = c(
+    nrow(nyc_pluto),
+    ncol(nyc_pluto),
+    sum(duplicated(nyc_pluto$bbl))
+  )
+) |>
+  knitr::kable(
+    caption = "NYC PLUTO Dataset Summary",
+    format.args = list(big.mark = ",")
+  )
+```
+
+## Task 6: Exploratory Data Analysis
+
+### Question 1: Which NYC census tract has the most office floor area?
+
+```{r}
+library(dplyr)
+library(readr)
+library(knitr)
+
+# Convert office area into numeric values
+pluto_office <- nyc_pluto %>%
+  mutate(
+    officearea = parse_number(officearea)
+  ) %>%
+  filter(
+    !is.na(bct2020),
+    bct2020 != ""
+  )
+
+# Add together the office floor area for each census tract
+office_by_tract <- pluto_office %>%
+  group_by(bct2020) %>%
+  summarise(
+    total_office_area = sum(
+      officearea,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_office_area))
+
+# Display the top 10 census tracts
+office_by_tract %>%
+  slice_head(n = 10) %>%
+  kable(
+    col.names = c(
+      "Census Tract ID",
+      "Total Office Area (sq. ft.)"
+    ),
+    caption = "Top 10 NYC Census Tracts by Office Floor Area",
+    format.args = list(big.mark = ",")
+  )
+
+# Identify the tract with the largest office area
+top_office_tract <- office_by_tract %>%
+  slice_max(
+    total_office_area,
+    n = 1,
+    with_ties = FALSE
+  )
+
+```
+
+### Question 2: Which NYC Neighborhood Has the Most Residential Units?
+
+```{r}
+library(sf)
+library(dplyr)
+library(readr)
+library(knitr)
+
+# Select PLUTO properties with valid coordinates
+pluto_residential <- nyc_pluto %>%
+  mutate(
+    latitude = parse_number(latitude),
+    longitude = parse_number(longitude),
+    unitsres = parse_number(unitsres)
+  ) %>%
+  filter(
+    !is.na(latitude),
+    !is.na(longitude),
+    !is.na(unitsres),
+    unitsres >= 0
+  )
+
+# Convert property locations into geographic points
+pluto_points <- st_as_sf(
+  pluto_residential,
+  coords = c("longitude", "latitude"),
+  crs = 4326,
+  remove = TRUE
+)
+
+# Match coordinate systems
+pluto_points <- st_transform(
+  pluto_points,
+  st_crs(nyc_nta)
+)
+
+# Assign each property to its neighborhood
+pluto_nta_join <- st_join(
+  pluto_points,
+  nyc_nta %>%
+    select(NTA2020, NTAName, BoroName),
+  join = st_within,
+  left = TRUE
+)
+
+# Calculate total residential units by neighborhood
+residential_by_nta <- pluto_nta_join %>%
+  st_drop_geometry() %>%
+  filter(!is.na(NTA2020)) %>%
+  group_by(NTA2020, NTAName, BoroName) %>%
+  summarise(
+    residential_units = sum(unitsres, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(residential_units))
+
+# Display the 10 neighborhoods with the most residential units
+residential_by_nta %>%
+  slice_head(n = 10) %>%
+  kable(
+    col.names = c(
+      "NTA Code",
+      "Neighborhood",
+      "Borough",
+      "Residential Units"
+    ),
+    caption = "Top 10 NYC Neighborhoods by Residential Units",
+    format.args = list(big.mark = ",")
+  )
+
+# Identify the neighborhood with the most residential units
+top_residential_nta <- residential_by_nta %>%
+  slice_head(n = 1)
+
+
+
+# Check how many properties did not match an NTA
+
+```
+
+### Question 3: Which NYC Census Tract Has the Highest Population per Residential Square Foot or Unit?
+```{r}
+library(dplyr)
+library(readr)
+library(sf)
+library(knitr)
+
+# Convert PLUTO tract IDs to Census GEOIDs
+pluto_with_geoid <- nyc_pluto %>%
+  mutate(
+    borough_code = substr(bct2020, 1, 1),
+    tract_code = substr(bct2020, 2, 7),
+    county_code = case_when(
+      borough_code == "1" ~ "061",
+      borough_code == "2" ~ "005",
+      borough_code == "3" ~ "047",
+      borough_code == "4" ~ "081",
+      borough_code == "5" ~ "085",
+      TRUE ~ NA_character_
+    ),
+    GEOID = if_else(
+      !is.na(county_code) &
+        grepl("^[0-9]{6}$", tract_code),
+      paste0("36", county_code, tract_code),
+      NA_character_
+    )
+  )
+
+# Aggregate residential floor area and units by tract
+residential_by_tract <- pluto_with_geoid %>%
+  filter(!is.na(GEOID)) %>%
+  mutate(
+    resarea = parse_number(resarea),
+    unitsres = parse_number(unitsres)
+  ) %>%
+  group_by(GEOID) %>%
+  summarise(
+    total_residential_area = sum(resarea, na.rm = TRUE),
+    total_residential_units = sum(unitsres, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Combine population and residential data
+tract_density <- nyc_tracts %>%
+  st_drop_geometry() %>%
+  select(GEOID, NAME, totalE) %>%
+  left_join(residential_by_tract, by = "GEOID") %>%
+  mutate(
+    population_per_sqft = if_else(
+      !is.na(total_residential_area) &
+        total_residential_area > 0,
+      totalE / total_residential_area,
+      NA_real_
+    ),
+    population_per_unit = if_else(
+      !is.na(total_residential_units) &
+        total_residential_units > 0,
+      totalE / total_residential_units,
+      NA_real_
+    )
+  )
+
+# Top five tracts by population per residential square foot
+top_density_sqft <- tract_density %>%
+  filter(!is.na(population_per_sqft), totalE > 0) %>%
+  arrange(desc(population_per_sqft)) %>%
+  slice_head(n = 5)
+
+top_density_sqft %>%
+  select(GEOID, NAME, population_per_sqft) %>%
+  kable(
+    digits = 4,
+    caption = "Highest Population per Residential Square Foot"
+  )
+
+# Top five tracts by population per residential unit
+top_density_units <- tract_density %>%
+  filter(!is.na(population_per_unit), totalE > 0) %>%
+  arrange(desc(population_per_unit)) %>%
+  slice_head(n = 5)
+
+top_density_units %>%
+  select(GEOID, NAME, population_per_unit) %>%
+  kable(
+    digits = 2,
+    caption = "Highest Population per Residential Unit"
+  )
+
+# Sensitivity check: tracts with at least 100 residential units
+density_check <- tract_density %>%
+  filter(
+    total_residential_units >= 100,
+    total_residential_area > 0,
+    totalE > 0
+  )
+
+# Highest-ranked tract under each measure after filtering
+density_check %>%
+  arrange(desc(population_per_sqft)) %>%
+  select(GEOID, NAME, population_per_sqft) %>%
+  slice_head(n = 5) %>%
+  kable(
+    digits = 4,
+    caption = "Population per Square Foot: 100+ Residential Units"
+  )
+
+density_check %>%
+  arrange(desc(population_per_unit)) %>%
+  select(GEOID, NAME, population_per_unit) %>%
+  slice_head(n = 5) %>%
+  kable(
+    digits = 2,
+    caption = "Population per Unit: 100+ Residential Units"
+  )
+```
+The original result showed an unusually high value of 794 people per residential unit, but Census tracts with very few recorded residential units can produce extreme ratios. I applied a minimum threshold of 100 residential units to reduce the influence of small denominators, and the filtered result of 21.65 people per unit may still reflect data limitations.
+
+### Question 4: Which Five Metropolitan Areas Have the Highest Korean American Population Share?
+
+```{r}
+library(tidycensus)
+library(dplyr)
+library(knitr)
+
+# Download 2024 ACS 5-year metropolitan-area data
+metro_acs <- get_acs(
+  geography = "cbsa",
+  variables = c(
+    korean = "B02018_005",
+    total = "B01003_001"
+  ),
+  year = 2024,
+  survey = "acs5",
+  output = "wide"
+)
+
+# Calculate Korean American population percentages
+metro_korean <- metro_acs %>%
+  mutate(
+    korean_percentage = koreanE / totalE * 100
+  )
+
+# Exclude NYC and micropolitan areas
+top5_korean_metros <- metro_korean %>%
+  filter(
+    grepl("Metro Area", NAME),
+    !grepl("New York-Newark-Jersey City", NAME),
+    !is.na(korean_percentage),
+    totalE > 0
+  ) %>%
+  arrange(desc(korean_percentage)) %>%
+  slice_head(n = 5)
+
+# Display the top five metropolitan areas
+top5_korean_metros %>%
+  select(NAME, koreanE, totalE, korean_percentage) %>%
+  kable(
+    col.names = c(
+      "Metropolitan Area",
+      "Korean Population",
+      "Total Population",
+      "Korean Population (%)"
+    ),
+    digits = 2,
+    format.args = list(big.mark = ","),
+    caption = "Top Five Metropolitan Areas by Korean American Population Share"
+  )
+```
+
+### Question 5: Geographic Distribution of Korean Americans in Los Angeles
+
+```{r}
+library(tidycensus)
+library(tigris)
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+
+options(tigris_use_cache = TRUE)
+
+# Download Korean American population data by census tract
+la_tracts <- get_acs(
+  geography = "tract",
+  variables = c(
+    korean = "B02018_005",
+    total = "B01003_001"
+  ),
+  state = "CA",
+  county = "Los Angeles",
+  year = 2024,
+  survey = "acs5",
+  geometry = TRUE,
+  output = "wide"
+)
+
+# Download California Census Place boundaries
+ca_places <- places(
+  state = "CA",
+  year = 2024,
+  class = "sf"
+)
+
+# Identify places intersecting Los Angeles County
+la_county_boundary <- st_union(la_tracts)
+
+la_places <- ca_places %>%
+  st_transform(st_crs(la_tracts)) %>%
+  st_filter(la_county_boundary)
+
+# Keep place identifiers and names
+la_places_simple <- la_places %>%
+  select(
+    place_geoid = GEOID,
+    place_name = NAME
+  )
+
+# Assign each census tract to its largest-overlapping place
+la_tract_places <- st_join(
+  la_tracts,
+  la_places_simple,
+  join = st_intersects,
+  left = TRUE,
+  largest = TRUE
+)
+
+# Calculate Korean American population by place
+la_place_population <- la_tract_places %>%
+  st_drop_geometry() %>%
+  filter(!is.na(place_geoid)) %>%
+  group_by(place_geoid, place_name) %>%
+  summarise(
+    korean_population = sum(koreanE, na.rm = TRUE),
+    total_population = sum(totalE, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    korean_percentage = if_else(
+      total_population > 0,
+      korean_population / total_population * 100,
+      NA_real_
+    )
+  ) %>%
+  arrange(desc(korean_population))
+
+# Table: Top 10 places by Korean American population
+la_place_population %>%
+  select(
+    place_name,
+    korean_population,
+    total_population,
+    korean_percentage
+  ) %>%
+  slice_head(n = 10) %>%
+  kable(
+    col.names = c(
+      "Place",
+      "Korean Population",
+      "Total Population",
+      "Korean Population (%)"
+    ),
+    digits = 2,
+    format.args = list(big.mark = ","),
+    caption = "Top 10 Los Angeles County Places by Korean American Population"
+  )
+
+# Join population estimates to place boundaries
+la_map <- la_places %>%
+  left_join(
+    la_place_population,
+    by = c("GEOID" = "place_geoid")
+  )
+
+# Map: Korean American population share
+ggplot(la_map) +
+  geom_sf(
+    aes(fill = korean_percentage),
+    color = "white",
+    linewidth = 0.1
+  ) +
+  scale_fill_viridis_c(
+    option = "magma",
+    na.value = "grey90",
+    name = "Korean\npopulation (%)"
+  ) +
+  labs(
+    title = "Korean American Population in LA County",
+    subtitle = "Estimated percentage by Census Place",
+    caption = "Source: 2024 ACS 5-Year Estimates"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+
+### Question 6: What Percentage of Korean Americans Live in Major U.S. Metropolitan Areas?
+
+```{r}
+library(tidycensus)
+library(dplyr)
+library(knitr)
+
+# Get the nationwide Korean American population
+us_korean <- get_acs(
+  geography = "us",
+  variables = c(
+    korean = "B02018_005",
+    total = "B01003_001"
+  ),
+  year = 2024,
+  survey = "acs5",
+  output = "wide"
+)
+
+# Nationwide Korean American population
+us_korean_total <- us_korean$koreanE[1]
+
+# Calculate each metropolitan area's share of the national total
+metro_national_share <- metro_korean %>%
+  filter(grepl("Metro Area", NAME)) %>%
+  mutate(
+    share_of_us_koreans = koreanE / us_korean_total * 100
+  ) %>%
+  arrange(desc(koreanE))
+
+# Display the top 10 metropolitan areas
+metro_national_share %>%
+  select(NAME, koreanE, share_of_us_koreans) %>%
+  slice_head(n = 10) %>%
+  kable(
+    col.names = c(
+      "Metropolitan Area",
+      "Korean Population",
+      "Share of U.S. Korean Population (%)"
+    ),
+    digits = 2,
+    format.args = list(big.mark = ","),
+    caption = "Korean American Population in Major U.S. Metropolitan Areas"
+  )
+
+# Calculate New York metropolitan area's share
+ny_metro_share <- metro_national_share %>%
+  filter(grepl("New York-Newark-Jersey City", NAME)) %>%
+  select(NAME, koreanE, share_of_us_koreans)
+
+
+```
+
+### Question 7: Relationship Between Population and Residential Units
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Prepare NYC census tract housing and population data
+housing_relationship <- tract_density %>%
+  filter(
+    !is.na(totalE),
+    !is.na(total_residential_units),
+    total_residential_units > 0,
+    totalE > 0
+  )
+
+# Calculate correlation
+housing_correlation <- cor(
+  housing_relationship$total_residential_units,
+  housing_relationship$totalE
+)
+
+# Fit linear regression model
+housing_model <- lm(
+  totalE ~ total_residential_units,
+  data = housing_relationship
+)
+
+# Calculate R-squared
+housing_r_squared <- summary(housing_model)$r.squared
+
+# Display numerical results
+cat("Correlation:", round(housing_correlation, 3), "\n")
+cat("R-squared:", round(housing_r_squared, 3), "\n")
+
+# Create scatterplot with regression line
+ggplot(
+  housing_relationship,
+  aes(x = total_residential_units, y = totalE)
+) +
+  geom_point(
+    alpha = 0.3,
+    color = "steelblue"
+  ) +
+  geom_smooth(
+    method = "lm",
+    se = FALSE,
+    color = "red"
+  ) +
+  labs(
+    title = "Population vs. Residential Units in NYC",
+    subtitle = "Relationship across NYC census tracts",
+    x = "Number of Residential Units",
+    y = "Census Tract Population",
+    caption = "Sources: 2024 ACS 5-Year Estimates and NYC PLUTO"
+  ) +
+  theme_minimal()
+```
+
+
+### Question 8: Which NYC Neighborhoods Have the Tallest Buildings?
+
+```{r}
+library(dplyr)
+library(readr)
+library(sf)
+library(knitr)
+
+# Prepare building floor counts from PLUTO
+building_floors <- pluto_nta_join %>%
+  st_drop_geometry() %>%
+  filter(!is.na(NTA2020)) %>%
+  mutate(
+    numfloors = parse_number(numfloors)
+  ) %>%
+  filter(
+    !is.na(numfloors),
+    numfloors > 0
+  )
+
+# Identify unusually high floor counts
+building_floors %>%
+  filter(numfloors > 120) %>%
+  select(address, NTAName, BoroName, numfloors) %>%
+  arrange(desc(numfloors)) %>%
+  kable(
+    caption = "Building Records Exceeding 120 Floors"
+  )
+
+# Apply exploratory cutoff of 120 floors
+tallest_by_nta_clean <- building_floors %>%
+  filter(numfloors <= 120) %>%
+  group_by(NTA2020, NTAName, BoroName) %>%
+  summarise(
+    tallest_building_floors = max(numfloors),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(tallest_building_floors))
+
+# Display the top 10 NTAs
+tallest_by_nta_clean %>%
+  slice_head(n = 10) %>%
+  select(
+    NTAName,
+    BoroName,
+    tallest_building_floors
+  ) %>%
+  kable(
+    col.names = c(
+      "Neighborhood",
+      "Borough",
+      "Maximum Recorded Floors"
+    ),
+    caption = "Top 10 NYC NTAs by Maximum Building Floors"
+  )
+```
+The PLUTO dataset contains an unusually high floor-count value of 342.87. I excluded records above 120 floors as an exploratory data-cleaning decision. The ranking therefore reflects the filtered dataset, not necessarily the definitive tallest buildings in NYC.
+
+### Question 9: NYC Population Density Map
+
+```{r}
+#| fig-width: 10
+#| fig-height: 7
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+
+# Calculate census tract population density
+nyc_density_map <- nyc_tracts %>%
+  st_transform(2263) %>%
+  mutate(
+    area_sqkm = as.numeric(st_area(.)) / 10763910.4167,
+    population_density = if_else(
+      area_sqkm > 0,
+      totalE / area_sqkm,
+      NA_real_
+    )
+  )
+
+# Create the population density map
+ggplot(nyc_density_map) +
+  geom_sf(
+    aes(fill = population_density),
+    color = NA
+  ) +
+  scale_fill_viridis_c(
+    option = "plasma",
+    trans = "sqrt",
+    na.value = "grey90",
+    name = "People\nper sq. km"
+  ) +
+  labs(
+    title = "Population Density Across NYC",
+    subtitle = "Population per square kilometer by census tract",
+    caption = "Source: 2024 ACS 5-Year Estimates"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+
+### Question 10: How Many New Yorkers Live in Primarily Commercial Areas?
+
+```{r}
+library(dplyr)
+library(readr)
+library(knitr)
+
+# Calculate commercial and residential floor space by tract
+commercial_by_tract <- pluto_with_geoid %>%
+  filter(!is.na(GEOID)) %>%
+  mutate(
+    comarea = parse_number(comarea),
+    resarea = parse_number(resarea)
+  ) %>%
+  group_by(GEOID) %>%
+  summarise(
+    total_commercial_area = sum(comarea, na.rm = TRUE),
+    total_residential_area = sum(resarea, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Join floor space to census tract population
+commercial_population <- nyc_tracts %>%
+  sf::st_drop_geometry() %>%
+  select(GEOID, NAME, totalE) %>%
+  left_join(commercial_by_tract, by = "GEOID") %>%
+  mutate(
+    primarily_commercial = total_commercial_area >
+      total_residential_area
+  )
+
+# Summarize population in primarily commercial tracts
+commercial_summary <- commercial_population %>%
+  filter(primarily_commercial %in% TRUE) %>%
+  summarise(
+    number_of_tracts = n(),
+    population = sum(totalE, na.rm = TRUE)
+  )
+
+# Display the results
+commercial_summary %>%
+  kable(
+    col.names = c(
+      "Number of Commercial-Dominant Tracts",
+      "Estimated Population"
+    ),
+    format.args = list(big.mark = ","),
+    caption = "Population Living in Commercial-Dominant NYC Census Tracts"
+  )
+```
+## Task 7: Korean Americans in the United States
+
+### Korean American Population Distribution in NYC
+
+```{r}
+#| fig-width: 10
+#| fig-height: 7
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+
+# Calculate Korean American population percentage
+nyc_korean_map <- nyc_tracts %>%
+  mutate(
+    korean_percentage = if_else(
+      !is.na(totalE) & totalE > 0,
+      koreanE / totalE * 100,
+      NA_real_
+    )
+  )
+
+# Create NYC Korean American population map
+ggplot(nyc_korean_map) +
+  geom_sf(
+    aes(fill = korean_percentage),
+    color = NA
+  ) +
+  scale_fill_viridis_c(
+    option = "magma",
+    na.value = "grey90",
+    name = "Korean\npopulation (%)"
+  ) +
+  labs(
+    title = "Korean American Population Across NYC",
+    subtitle = "Percentage of residents by census tract",
+    caption = "Source: 2024 ACS 5-Year Estimates"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(face = "bold")
+  )
+```
+### Written Analysis
+
+About 2,062,223 Korean Americans live across the United States out of 334,922,499 people total. While Korean Americans live in many states, they aren't spread evenly across the map. Larger groups tend to show up in major metro areas, where jobs, family ties, and established communities are often discussed as key influences on settlement. Looking at where people live helps show how these communities take shape and why certain places hold larger populations over time.
+
+Based on 2024 ACS 5 year estimates, Los Angeles has the largest Korean American population at 343,006 people (16.63% of the national total), followed by New York–Newark–Jersey City at 225,542 (10.94%) and Washington, DC at 108,241 (5.25%). Together, Los Angeles and New York make up 27.57% of Korean Americans nationwide. Still, raw counts tell a different story than local shares. Urban Honolulu has fewer Korean Americans (42,534) than Los Angeles, yet they make up 4.25% of Honolulu's total population compared to 2.64% in Los Angeles.
+
+Local maps show how communities spread out within a region rather than sitting in just one spot. Across Los Angeles County, approximate place level estimates created by assigning each census tract to its largest overlapping Census Place put the City of Los Angeles highest in headcount at 113,594 residents (2.94% of the city), while suburban places often show higher local shares, such as Cerritos at 11.79% (5,643 people), La Mirada at 11.28% (5,323), and Torrance at 8.61% (12,243). In New York City, neighborhood data points to strong clustering in Queens led by Murray Hill Broadway Flushing with about 7,944 Korean American residents and the NYC map shows that certain census tracts in northeastern Queens, especially around Flushing, reach much higher Korean American population percentages than most other parts of the city.
+
+Historical context on Korean immigrants distinct from the Census estimates for the overall Korean American population, which includes U.S. born residents helps explain why these hubs grew. Research on Korean immigrants notes that the 1965 immigration law led to larger waves of Korean arrivals, with many settling in places like California and New York alongside family connections and major metro opportunities (Esterline & Batalova, 2022). Over time, local churches and community institutions helped support families and newcomers across urban centers and suburbs (Zhou & Kim, 2007). While census numbers alone can't prove why individuals choose specific places, pairing them with historical research gives a fuller picture of how migration history and community networks align with today's geographic patterns.
+
+### References
+
+- Esterline, C., & Batalova, J. (2022, April 14). *Korean Immigrants in the United States*. Migration Policy Institute. https://www.migrationpolicy.org/journal/spotlight/korean-immigrants-united-states-2022
+
+- Zhou, M., & Kim, S. S. (2007, May 3). *After-School Institutions in Chinese and Korean Immigrant Communities: A Model for Others?* Migration Policy Institute. https://platform.migrationpolicy.org/article/after-school-institutions-chinese-and-korean-immigrant-communities-model-others
+
+
+::: {.callout-note collapse="true"}
+## AI Usage Statement
+
+I used ChatGPT to help understand R code, troubleshoot errors in RStudio, and learn how to create maps and visualizations using ACS Census data. I also used it to understand Quarto formatting and identify historical sources for verification.
+
+I reviewed the outputs and checked the calculations and visualizations against my project data.
+
+:::
